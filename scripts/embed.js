@@ -13,7 +13,8 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import readline from 'readline';
-import 'dotenv/config';
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
 import OpenAI from 'openai';
 
 const MODEL      = 'text-embedding-3-small';
@@ -33,11 +34,13 @@ function parseArgs() {
   const limit        = parseInt(args.find(a => a.startsWith('--limit='))?.split('=')[1] ?? '0');
   const typesArg     = args.find(a => a.startsWith('--types='));
   const types        = typesArg ? typesArg.split('=')[1].split(',') : null;
+  const verbose      = args.includes('--verbose');
   return {
     doSubjects: !cardsOnly,
     doCards:    !subjectsOnly,
     limit,
     types,
+    verbose,
   };
 }
 
@@ -69,7 +72,7 @@ async function embedBatch(client, texts) {
 }
 
 async function embedItems(client, items, ndjsonPath, opts = {}) {
-  const { limit = 0 } = opts;
+  const { limit = 0, verbose = false } = opts;
   fs.mkdirSync(EMBEDDINGS_DIR, { recursive: true });
 
   const existing = await loadExistingHashes(ndjsonPath);
@@ -99,16 +102,22 @@ async function embedItems(client, items, ndjsonPath, opts = {}) {
   }
 
   let done = 0;
+  const startTime = Date.now();
   for (let i = 0; i < work.length; i += BATCH_SIZE) {
     const batch = work.slice(i, i + BATCH_SIZE);
     const texts = batch.map(b => b.text);
+    if (verbose) batch.forEach(b => console.log(`    → ${b.name ?? b.id}`));
     const vectors = await embedBatch(client, texts);
     for (let j = 0; j < batch.length; j++) {
       const { id, text } = batch[j];
       allEmbeddings.set(id, { id, hash: sha256(text), embedding: vectors[j] });
     }
     done += batch.length;
-    console.log(`    ${done.toLocaleString()} / ${work.length.toLocaleString()}`);
+    const elapsed = (Date.now() - startTime) / 1000;
+    const rate = done / elapsed;
+    const etaSec = rate > 0 ? Math.round((work.length - done) / rate) : 0;
+    const eta = etaSec > 60 ? `${Math.floor(etaSec/60)}m ${etaSec%60}s` : `${etaSec}s`;
+    console.log(`    ${done.toLocaleString()} / ${work.length.toLocaleString()} (${((done/work.length)*100).toFixed(1)}%) — ${rate.toFixed(1)}/s — ETA ${eta}`);
   }
 
   // Write fresh ndjson
@@ -136,15 +145,15 @@ async function main() {
     process.exit(1);
   }
 
-  const { doSubjects, doCards, limit, types } = parseArgs();
+  const { doSubjects, doCards, limit, types, verbose } = parseArgs();
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   if (doSubjects) {
     console.log('Embedding subjects…');
     let subjects = JSON.parse(fs.readFileSync(SUBJECTS_FILE, 'utf8'));
     if (types) subjects = subjects.filter(s => types.includes(s.subject_type));
-    const items = subjects.map(s => ({ id: s.id, text: subjectText(s) }));
-    await embedItems(client, items, SUBJECTS_NDJSON, { limit });
+    const items = subjects.map(s => ({ id: s.id, name: s.name, text: subjectText(s) }));
+    await embedItems(client, items, SUBJECTS_NDJSON, { limit, verbose });
   }
 
   if (doCards) {
@@ -152,8 +161,8 @@ async function main() {
     const cards = JSON.parse(fs.readFileSync(CARDS_FILE, 'utf8'));
     const items = cards
       .filter(c => c.vision_description) // only cards with descriptions
-      .map(c => ({ id: c.scryfall_id, text: cardText(c) }));
-    await embedItems(client, items, CARDS_NDJSON, { limit });
+      .map(c => ({ id: c.scryfall_id, name: c.name, text: cardText(c) }));
+    await embedItems(client, items, CARDS_NDJSON, { limit, verbose });
   }
 
   console.log('Done.');

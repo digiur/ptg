@@ -9,7 +9,8 @@
 
 import fs from 'fs';
 import path from 'path';
-import 'dotenv/config';
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
 import OpenAI from 'openai';
 
 const CARDS_FILE    = path.resolve('data/cards.json');
@@ -24,7 +25,8 @@ const SYSTEM_PROMPT =
 function parseArgs() {
   const limit = parseInt(process.argv.find(a => a.startsWith('--limit='))?.split('=')[1] ?? '0');
   const concurrency = parseInt(process.argv.find(a => a.startsWith('--concurrency='))?.split('=')[1] ?? '20');
-  return { limit, concurrency };
+  const verbose = process.argv.includes('--verbose');
+  return { limit, concurrency, verbose };
 }
 
 async function describeCard(client, card) {
@@ -52,14 +54,15 @@ async function describeCard(client, card) {
   return resp.choices[0]?.message?.content?.trim() ?? null;
 }
 
-async function processBatch(client, cards, batch) {
+async function processBatch(client, cards, batch, verbose) {
   await Promise.all(batch.map(async (card) => {
     try {
       const desc = await describeCard(client, card);
       card.vision_description = desc;
+      if (verbose) console.log(`    ✓ ${card.name}: ${desc?.slice(0, 80) ?? '(no description)'}`);
     } catch (err) {
+      if (verbose) console.log(`    ✗ ${card.name}: ERROR`);
       console.warn(`  WARN: ${card.name} (${card.scryfall_id}): ${err.message}`);
-      // leave vision_description as null — will retry on next run
     }
   }));
 }
@@ -70,7 +73,7 @@ async function main() {
     process.exit(1);
   }
 
-  const { limit, concurrency } = parseArgs();
+  const { limit, concurrency, verbose } = parseArgs();
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const cards = JSON.parse(fs.readFileSync(CARDS_FILE, 'utf8'));
@@ -82,16 +85,26 @@ async function main() {
 
   let done = 0;
   const batchSize = concurrency;
+  const startTime = Date.now();
 
   for (let i = 0; i < work.length; i += batchSize) {
     const batch = work.slice(i, i + batchSize);
-    await processBatch(client, cards, batch);
+    await processBatch(client, cards, batch, verbose);
     done += batch.length;
 
     // Write back after every batch — resumable
     fs.writeFileSync(CARDS_FILE, JSON.stringify(cards, null, 0));
+
     const pct = ((done / work.length) * 100).toFixed(1);
-    console.log(`  ${done.toLocaleString()} / ${work.length.toLocaleString()} (${pct}%)`);
+    const elapsed = (Date.now() - startTime) / 1000;
+    const rate = done / elapsed; // cards/sec
+    const remaining = work.length - done;
+    const etaSec = rate > 0 ? Math.round(remaining / rate) : 0;
+    const eta = etaSec > 60
+      ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s`
+      : `${etaSec}s`;
+    const lastName = batch[batch.length - 1].name;
+    console.log(`  ${done.toLocaleString()} / ${work.length.toLocaleString()} (${pct}%) — ${rate.toFixed(1)} cards/s — ETA ${eta} — last: ${lastName}`);
   }
 
   console.log('Done.');

@@ -190,6 +190,17 @@ main {
 .card-set    { font-size: 0.7rem;  color: #5a4e3e; }
 .card-sim    { font-size: 0.72rem; color: #c8a86b; margin-top: 0.1rem; }
 
+/* --- Footer --- */
+footer {
+  margin-top: 3rem;
+  padding: 1.5rem 2rem;
+  border-top: 1px solid #2a2520;
+  color: #4a3e2e;
+  font-size: 0.78rem;
+}
+footer a { color: #5a4e3e; text-decoration: none; }
+footer a:hover { color: #c8a86b; }
+
 /* --- Utility --- */
 .loading, .empty-state {
   color: #5a4e3e;

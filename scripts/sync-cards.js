@@ -46,13 +46,29 @@ async function main() {
   const entry = meta.data.find(d => d.type === 'unique_artwork');
   if (!entry) throw new Error('Could not find unique_artwork bulk-data entry');
 
-  console.log(`Downloading ${entry.name} (${(entry.size / 1e6).toFixed(0)} MB)…`);
+  const totalMB = (entry.size / 1e6).toFixed(0);
+  console.log(`Downloading ${entry.name} (${totalMB} MB)…`);
 
   const tmpFile = OUT_FILE + '.tmp';
   const res = await fetch(entry.download_uri, { headers: { 'User-Agent': USER_AGENT } });
   if (!res.ok) throw new Error(`HTTP ${res.status} downloading bulk data`);
 
-  await pipeline(res.body, createWriteStream(tmpFile));
+  // Stream with progress reporting
+  let downloaded = 0;
+  let lastReported = 0;
+  const reportEvery = 10 * 1e6; // every 10 MB
+  const progressStream = new TransformStream({
+    transform(chunk, controller) {
+      downloaded += chunk.byteLength;
+      if (downloaded - lastReported >= reportEvery) {
+        lastReported = downloaded;
+        process.stdout.write(`  ${(downloaded / 1e6).toFixed(0)} / ${totalMB} MB\r`);
+      }
+      controller.enqueue(chunk);
+    },
+    flush() { process.stdout.write('\n'); }
+  });
+  await pipeline(res.body.pipeThrough(progressStream), createWriteStream(tmpFile));
 
   console.log('Parsing…');
   const raw = JSON.parse(fs.readFileSync(tmpFile, 'utf8'));

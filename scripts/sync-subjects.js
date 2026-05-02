@@ -135,7 +135,24 @@ function parsePacksDir(packsDir, requestedTypes) {
   const subjects = [];
   if (!fs.existsSync(packsDir)) return subjects;
 
+  let filesScanned = 0;
+  let lastDir = '';
+
   for (const file of walkJsonFiles(packsDir)) {
+    filesScanned++;
+
+    // Report when entering a new top-level pack subdirectory
+    const rel = path.relative(packsDir, file);
+    const topDir = rel.split(path.sep)[0];
+    if (topDir !== lastDir) {
+      lastDir = topDir;
+      console.log(`  scanning: ${topDir}`);
+    }
+
+    if (filesScanned % 1000 === 0) {
+      console.log(`  ${filesScanned.toLocaleString()} files scanned, ${subjects.length.toLocaleString()} found so far`);
+    }
+
     let data;
     try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; }
 
@@ -155,6 +172,7 @@ function parsePacksDir(packsDir, requestedTypes) {
       subjects.push({ id, name, ...mapped });
     }
   }
+
   return subjects;
 }
 
