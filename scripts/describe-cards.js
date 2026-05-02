@@ -6,6 +6,7 @@
 //   node scripts/describe-cards.js
 //   node scripts/describe-cards.js --limit=100     # only process N cards (testing)
 //   node scripts/describe-cards.js --concurrency=20
+//   node scripts/describe-cards.js --force         # re-describe all cards (after prompt changes)
 
 import fs from 'fs';
 import path from 'path';
@@ -36,7 +37,8 @@ function parseArgs() {
   const concurrency = parseInt(process.argv.find(a => a.startsWith('--concurrency='))?.split('=')[1] ?? String(DEFAULT_CONCURRENCY));
   const verbose = process.argv.includes('--verbose');
   const dryRun = process.argv.includes('--dry-run');
-  return { limit, concurrency, verbose, dryRun };
+  const force = process.argv.includes('--force');
+  return { limit, concurrency, verbose, dryRun, force };
 }
 
 async function describeCard(client, card, retries = 0) {
@@ -91,14 +93,17 @@ async function main() {
     process.exit(1);
   }
 
-  const { limit, concurrency, verbose, dryRun } = parseArgs();
+  const { limit, concurrency, verbose, dryRun, force } = parseArgs();
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const cards = JSON.parse(fs.readFileSync(CARDS_FILE, 'utf8'));
-  const todo = cards.filter(c => !c.vision_description && c.art_crop_uri);
+  const todo = force
+    ? cards.filter(c => c.art_crop_uri)
+    : cards.filter(c => !c.vision_description && c.art_crop_uri);
   const work = limit > 0 ? todo.slice(0, limit) : todo;
 
-  console.log(`${cards.length.toLocaleString()} total cards, ${work.length.toLocaleString()} need descriptions`);
+  const label = force ? 'to re-describe' : 'need descriptions';
+  console.log(`${cards.length.toLocaleString()} total cards, ${work.length.toLocaleString()} ${label}`);
   if (dryRun) {
     if (verbose) work.forEach(c => console.log(`  - ${c.name} (${c.scryfall_id})`));
     return;

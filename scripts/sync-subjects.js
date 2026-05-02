@@ -2,9 +2,9 @@
 // sync-subjects.js — fetch PF2e entities → upserts into data/subjects.json
 //
 // Usage:
-//   node scripts/sync-subjects.js                    # default: --types=npc
-//   node scripts/sync-subjects.js --types=npc,spell,equipment,hazard
-//   node scripts/sync-subjects.js --types=spell
+//   node scripts/sync-subjects.js --types=all
+//   node scripts/sync-subjects.js --types=npc
+//   node scripts/sync-subjects.js --types=npc,spell,weapon,armor,consumable,equipment,hazard,deity,vehicle
 
 import fs from 'fs';
 import path from 'path';
@@ -22,19 +22,29 @@ const SIZE_MAP = {
 
 // Which Foundry document types map to which subject_type
 const TYPE_MAP = {
-  npc:       'creature',
-  spell:     'spell',
-  equipment: 'item',
-  hazard:    'hazard',
+  npc:        'npc',
+  spell:      'spell',
+  equipment:  'equipment',
+  weapon:     'weapon',
+  armor:      'armor',
+  consumable: 'consumable',
+  hazard:     'hazard',
+  deity:      'deity',
+  vehicle:    'vehicle',
 };
 
 function parseArgs() {
   const args = process.argv.slice(2);
   const typesArg = args.find(a => a.startsWith('--types='));
-  const types = typesArg ? typesArg.replace('--types=', '').split(',') : ['npc'];
+  if (!typesArg) {
+    console.error(`Missing --types. Valid values: all, ${Object.keys(TYPE_MAP).join(', ')}`);
+    process.exit(1);
+  }
+  const raw = typesArg.replace('--types=', '').split(',');
+  const types = raw.includes('all') ? Object.keys(TYPE_MAP) : raw;
   const invalid = types.filter(t => !TYPE_MAP[t]);
   if (invalid.length) {
-    console.error(`Unknown types: ${invalid.join(', ')}. Valid: ${Object.keys(TYPE_MAP).join(', ')}`);
+    console.error(`Unknown types: ${invalid.join(', ')}. Valid: all, ${Object.keys(TYPE_MAP).join(', ')}`);
     process.exit(1);
   }
   return { types, dryRun: args.includes('--dry-run'), verbose: args.includes('--verbose') };
@@ -73,7 +83,7 @@ function mapNpc(data) {
   const details = sys.details ?? {};
   const traits = sys.traits ?? {};
   return {
-    subject_type: 'creature',
+    subject_type: 'npc',
     level:        sys.details?.level?.value ?? sys.level?.value ?? 0,
     size:         SIZE_MAP[traits.size?.value] ?? 'Medium',
     rarity:       traits.rarity?.value ?? 'common',
@@ -103,7 +113,7 @@ function mapEquipment(data) {
   const sys = data.system ?? {};
   const traits = sys.traits ?? {};
   return {
-    subject_type: 'item',
+    subject_type: 'equipment',
     level:        sys.level?.value ?? 0,
     size:         'Medium',
     rarity:       traits.rarity?.value ?? 'common',
@@ -130,7 +140,87 @@ function mapHazard(data) {
   };
 }
 
-const MAPPERS = { npc: mapNpc, spell: mapSpell, equipment: mapEquipment, hazard: mapHazard };
+function mapWeapon(data) {
+  const sys = data.system ?? {};
+  const traits = sys.traits ?? {};
+  return {
+    subject_type: 'weapon',
+    level:        sys.level?.value ?? 0,
+    size:         'Medium',
+    rarity:       traits.rarity?.value ?? 'common',
+    traits:       (traits.value ?? []).map(String),
+    source_book:  sys.publication?.title ?? sys.source?.value ?? '',
+    description:  stripHtml(sys.description?.value ?? ''),
+    is_npc:       false,
+  };
+}
+
+function mapArmor(data) {
+  const sys = data.system ?? {};
+  const traits = sys.traits ?? {};
+  return {
+    subject_type: 'armor',
+    level:        sys.level?.value ?? 0,
+    size:         'Medium',
+    rarity:       traits.rarity?.value ?? 'common',
+    traits:       (traits.value ?? []).map(String),
+    source_book:  sys.publication?.title ?? sys.source?.value ?? '',
+    description:  stripHtml(sys.description?.value ?? ''),
+    is_npc:       false,
+  };
+}
+
+function mapConsumable(data) {
+  const sys = data.system ?? {};
+  const traits = sys.traits ?? {};
+  return {
+    subject_type: 'consumable',
+    level:        sys.level?.value ?? 0,
+    size:         'Medium',
+    rarity:       traits.rarity?.value ?? 'common',
+    traits:       (traits.value ?? []).map(String),
+    source_book:  sys.publication?.title ?? sys.source?.value ?? '',
+    description:  stripHtml(sys.description?.value ?? ''),
+    is_npc:       false,
+  };
+}
+
+function mapDeity(data) {
+  const sys = data.system ?? {};
+  const traits = sys.traits ?? {};
+  const domains = sys.domains?.primary ?? [];
+  return {
+    subject_type: 'deity',
+    level:        0,
+    size:         'Medium',
+    rarity:       traits.rarity?.value ?? 'common',
+    traits:       (traits.value?.length ? traits.value : domains).map(String),
+    source_book:  sys.publication?.title ?? sys.source?.value ?? '',
+    description:  stripHtml(sys.description?.value ?? ''),
+    is_npc:       false,
+  };
+}
+
+function mapVehicle(data) {
+  const sys = data.system ?? {};
+  const traits = sys.traits ?? {};
+  return {
+    subject_type: 'vehicle',
+    level:        sys.level?.value ?? 0,
+    size:         SIZE_MAP[traits.size?.value] ?? 'Large',
+    rarity:       traits.rarity?.value ?? 'common',
+    traits:       (traits.value ?? []).map(String),
+    source_book:  sys.publication?.title ?? sys.source?.value ?? '',
+    description:  stripHtml(sys.description?.value ?? ''),
+    is_npc:       false,
+  };
+}
+
+const MAPPERS = {
+  npc: mapNpc, spell: mapSpell, equipment: mapEquipment,
+  weapon: mapWeapon, armor: mapArmor, consumable: mapConsumable,
+  hazard: mapHazard, deity: mapDeity, vehicle: mapVehicle,
+};
 
 function parsePacksDir(packsDir, requestedTypes, verbose = false) {
   const subjects = [];

@@ -6,9 +6,9 @@
 // subject page only downloads ~2 KB instead of the full matches corpus.
 //
 // Usage:
-//   node scripts/match.js                        # match all subjects not yet written
-//   node scripts/match.js --types=npc,spell      # only (re-)match subjects of these types
-//   node scripts/match.js --force                # recompute all, replacing existing matches
+//   node scripts/match.js --types=all             # match all subjects not yet written
+//   node scripts/match.js --types=npc,spell       # only (re-)match subjects of these types
+//   node scripts/match.js --types=all --force     # recompute all, replacing existing matches
 //   node scripts/match.js --top=20               # how many cards per subject (default 20)
 
 import fs from 'fs';
@@ -27,7 +27,12 @@ function parseArgs() {
   const dryRun  = args.includes('--dry-run');
   const verbose = args.includes('--verbose');
   const typesArg = args.find(a => a.startsWith('--types='));
-  const types   = typesArg ? typesArg.split('=')[1].split(',') : null;
+  if (!typesArg) {
+    console.error('Missing --types. Use --types=all or a comma-separated list of subject types.');
+    process.exit(1);
+  }
+  const raw = typesArg.split('=')[1].split(',');
+  const types = raw.includes('all') ? null : raw;
   const top     = parseInt(args.find(a => a.startsWith('--top='))?.split('=')[1] ?? '20');
   return { force, dryRun, verbose, types, top };
 }
@@ -85,7 +90,7 @@ async function main() {
   const subjectVecs = await loadSubjectEmbeddings(targetIds);
 
   if (subjectVecs.size === 0) {
-    console.error('No subject embeddings found. Run: node scripts/embed.js --subjects-only');
+    console.error('No subject embeddings found. Run: node scripts/embed.js --types=subjects');
     process.exit(1);
   }
   console.log(`Subject embeddings: ${subjectVecs.size.toLocaleString()} loaded`);

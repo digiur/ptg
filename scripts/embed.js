@@ -3,11 +3,11 @@
 // Resumable: stores {id, hash, embedding} per line; skips entries whose text hash hasn't changed.
 //
 // Usage:
-//   node scripts/embed.js                           # embed both subjects and cards
-//   node scripts/embed.js --subjects-only
-//   node scripts/embed.js --cards-only
-//   node scripts/embed.js --subjects-only --types=npc,spell   # only re-embed specific types
-//   node scripts/embed.js --limit=50                # testing
+//   node scripts/embed.js --types=all              # embed both subjects and cards
+//   node scripts/embed.js --types=subjects         # all subjects
+//   node scripts/embed.js --types=cards            # all cards
+//   node scripts/embed.js --types=npc,spell        # only subjects of these subject_types
+//   node scripts/embed.js --types=subjects --limit=50  # testing
 
 import fs from 'fs';
 import path from 'path';
@@ -29,21 +29,28 @@ const CARDS_NDJSON      = path.join(EMBEDDINGS_DIR, 'cards.ndjson');
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const subjectsOnly = args.includes('--subjects-only');
-  const cardsOnly    = args.includes('--cards-only');
-  const limit        = parseInt(args.find(a => a.startsWith('--limit='))?.split('=')[1] ?? '0');
-  const typesArg     = args.find(a => a.startsWith('--types='));
-  const types        = typesArg ? typesArg.split('=')[1].split(',') : null;
-  const verbose      = args.includes('--verbose');
-  const dryRun       = args.includes('--dry-run');
-  return {
-    doSubjects: !cardsOnly,
-    doCards:    !subjectsOnly,
-    limit,
-    types,
-    verbose,
-    dryRun,
-  };
+  const typesArg = args.find(a => a.startsWith('--types='));
+  if (!typesArg) {
+    console.error('Missing --types. Use --types=all, --types=subjects, --types=cards, or a comma-separated list of subject types.');
+    process.exit(1);
+  }
+  const raw = typesArg.split('=')[1].split(',');
+  const limit   = parseInt(args.find(a => a.startsWith('--limit='))?.split('=')[1] ?? '0');
+  const verbose = args.includes('--verbose');
+  const dryRun  = args.includes('--dry-run');
+
+  let doSubjects, doCards, subjectTypeFilter;
+  if (raw.includes('all')) {
+    doSubjects = true; doCards = true; subjectTypeFilter = null;
+  } else if (raw.includes('subjects')) {
+    doSubjects = true; doCards = false; subjectTypeFilter = null;
+  } else if (raw.includes('cards')) {
+    doSubjects = false; doCards = true; subjectTypeFilter = null;
+  } else {
+    doSubjects = true; doCards = false; subjectTypeFilter = raw;
+  }
+
+  return { doSubjects, doCards, subjectTypeFilter, limit, verbose, dryRun };
 }
 
 function sha256(text) {
@@ -147,13 +154,13 @@ async function main() {
     process.exit(1);
   }
 
-  const { doSubjects, doCards, limit, types, verbose, dryRun } = parseArgs();
+  const { doSubjects, doCards, subjectTypeFilter, limit, verbose, dryRun } = parseArgs();
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   if (doSubjects) {
     console.log('Embedding subjects…');
     let subjects = JSON.parse(fs.readFileSync(SUBJECTS_FILE, 'utf8'));
-    if (types) subjects = subjects.filter(s => types.includes(s.subject_type));
+    if (subjectTypeFilter) subjects = subjects.filter(s => subjectTypeFilter.includes(s.subject_type));
     const items = subjects.map(s => ({ id: s.id, name: s.name, text: subjectText(s) }));
     if (dryRun) {
       const existing = await loadExistingHashes(SUBJECTS_NDJSON);
