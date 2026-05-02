@@ -88,6 +88,11 @@ node scripts/sync-subjects.js --dry-run
 node scripts/sync-subjects.js --types=npc,spell
 ```
 
+> **Troubleshooting:** if `sync-subjects.js` fails with `fatal: Not possible to fast-forward`, the shallow clone has diverged from the remote. Fix with:
+> ```bash
+> cd data/pf2e-repo && git fetch --depth=1 origin HEAD && git reset --hard FETCH_HEAD
+> ```
+
 ### `describe-cards.js`
 Calls GPT-4o-mini vision on each card's art crop and writes a short visual description back into `data/cards.json`. Resumable — skips cards that already have a description.
 
