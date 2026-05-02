@@ -71,44 +71,53 @@ async function loadExistingHashes(ndjsonPath) {
   return map;
 }
 
-async function embedBatch(client, texts) {
-  const resp = await client.embeddings.create({
-    model: MODEL,
-    dimensions: DIMENSIONS,
-    input: texts,
-  });
-  return resp.data.map(d => d.embedding);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function embedBatch(client, texts, retries = 0) {
+  try {
+    const resp = await client.embeddings.create({
+      model: MODEL,
+      dimensions: DIMENSIONS,
+      input: texts,
+    });
+    return resp.data.map(d => d.embedding);
+  } catch (err) {
+    const status = err?.status ?? err?.response?.status;
+    if ((status === 429 || status === 503) && retries < 6) {
+      // Prefer the retry-after-ms header if present, else exponential backoff
+      const retryAfterMs = parseInt(err?.headers?.['retry-after-ms'] ?? err?.headers?.['retry-after'] * 1000 ?? 0);
+      const delay = retryAfterMs > 0 ? retryAfterMs + 200 : Math.pow(2, retries) * 1000 + Math.random() * 500;
+      console.warn(`  Rate limited (429). Retrying in ${Math.round(delay / 1000)}s… (attempt ${retries + 1}/6)`);
+      await sleep(delay);
+      return embedBatch(client, texts, retries + 1);
+    }
+    throw err;
+  }
 }
 
 async function embedItems(client, items, ndjsonPath, opts = {}) {
   const { limit = 0, verbose = false } = opts;
   fs.mkdirSync(EMBEDDINGS_DIR, { recursive: true });
 
+  const partialPath = ndjsonPath + '.partial';
+
+  // Load hashes from both main file and any in-progress partial (partial = more recent)
   const existing = await loadExistingHashes(ndjsonPath);
-  const todo = items.filter(({ id, text }) => {
-    const h = sha256(text);
-    return existing.get(id) !== h;
-  });
+  const partial  = await loadExistingHashes(partialPath);
+  const combined = new Map([...existing, ...partial]);
+
+  const todo = items.filter(({ id, text }) => combined.get(id) !== sha256(text));
 
   const work = limit > 0 ? todo.slice(0, limit) : todo;
-  console.log(`  ${items.length.toLocaleString()} total, ${work.length.toLocaleString()} to embed`);
-  if (work.length === 0) return;
-
-  // Re-write the ndjson: carry forward unchanged entries, replace changed ones
-  // Strategy: load all existing into a Map, merge new embeddings, write fresh
-  const allEmbeddings = new Map();
-
-  // Load existing embeddings
-  if (fs.existsSync(ndjsonPath)) {
-    const rl = readline.createInterface({ input: fs.createReadStream(ndjsonPath), crlfDelay: Infinity });
-    for await (const line of rl) {
-      if (!line.trim()) continue;
-      try {
-        const obj = JSON.parse(line);
-        if (obj.id) allEmbeddings.set(obj.id, obj);
-      } catch { /* skip */ }
-    }
+  const resuming = partial.size > 0;
+  console.log(`  ${items.length.toLocaleString()} total, ${work.length.toLocaleString()} to embed${resuming ? ` (resuming — ${partial.size.toLocaleString()} already saved)` : ''}`);
+  if (work.length === 0) {
+    if (fs.existsSync(partialPath)) fs.unlinkSync(partialPath);
+    return;
   }
+
+  // Append each completed batch to .partial so progress survives interruption
+  const partialOut = fs.createWriteStream(partialPath, { flags: 'a' });
 
   let done = 0;
   const startTime = Date.now();
@@ -119,7 +128,7 @@ async function embedItems(client, items, ndjsonPath, opts = {}) {
     const vectors = await embedBatch(client, texts);
     for (let j = 0; j < batch.length; j++) {
       const { id, text } = batch[j];
-      allEmbeddings.set(id, { id, hash: sha256(text), embedding: vectors[j] });
+      partialOut.write(JSON.stringify({ id, hash: sha256(text), embedding: vectors[j] }) + '\n');
     }
     done += batch.length;
     const elapsed = (Date.now() - startTime) / 1000;
@@ -128,13 +137,26 @@ async function embedItems(client, items, ndjsonPath, opts = {}) {
     const eta = etaSec > 60 ? `${Math.floor(etaSec/60)}m ${etaSec%60}s` : `${etaSec}s`;
     console.log(`  ${done.toLocaleString()} / ${work.length.toLocaleString()} (${((done/work.length)*100).toFixed(1)}%) — ${rate.toFixed(1)}/s — ETA ${eta}`);
   }
+  await new Promise((res, rej) => { partialOut.end(); partialOut.on('finish', res); partialOut.on('error', rej); });
 
-  // Write fresh ndjson
+  // Merge: load main then partial into allEmbeddings (partial wins for same ID)
+  const allEmbeddings = new Map();
+  for (const src of [ndjsonPath, partialPath]) {
+    if (!fs.existsSync(src)) continue;
+    const rl = readline.createInterface({ input: fs.createReadStream(src), crlfDelay: Infinity });
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      try { const obj = JSON.parse(line); if (obj.id) allEmbeddings.set(obj.id, obj); } catch { /* skip */ }
+    }
+  }
+
+  // Write final ndjson
   const out = fs.createWriteStream(ndjsonPath);
   for (const obj of allEmbeddings.values()) {
     out.write(JSON.stringify(obj) + '\n');
   }
   await new Promise((res, rej) => { out.end(); out.on('finish', res); out.on('error', rej); });
+  fs.unlinkSync(partialPath);
   console.log(`  Wrote ${allEmbeddings.size.toLocaleString()} entries → ${ndjsonPath}`);
 }
 

@@ -14,6 +14,11 @@
 import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
+import os from 'os';
+import { Worker } from 'worker_threads';
+
+const WORKER_FILE    = path.resolve('scripts/match-worker.js');
+const CARD_BATCH_SIZE = 500;
 
 const SUBJECTS_FILE   = path.resolve('data/subjects.json');
 const SUBJECTS_NDJSON = path.resolve('data/embeddings/subjects.ndjson');
@@ -35,6 +40,15 @@ function parseArgs() {
   const types = raw.includes('all') ? null : raw;
   const top     = parseInt(args.find(a => a.startsWith('--top='))?.split('=')[1] ?? '20');
   return { force, dryRun, verbose, types, top };
+}
+
+function waitFor(worker, type) {
+  return new Promise((resolve, reject) => {
+    const onMsg = (msg) => { if (msg.type === type) { worker.off('message', onMsg); worker.off('error', onErr); resolve(msg); } };
+    const onErr = (err) => { worker.off('message', onMsg); worker.off('error', onErr); reject(err); };
+    worker.on('message', onMsg);
+    worker.on('error', onErr);
+  });
 }
 
 function cosine(a, b) {
@@ -95,57 +109,75 @@ async function main() {
   }
   console.log(`Subject embeddings: ${subjectVecs.size.toLocaleString()} loaded`);
 
-  // Initialize top-N heaps for each subject: Map<subjectId, [{scryfall_id, similarity}]>
-  const topN = new Map();
-  for (const id of subjectVecs.keys()) topN.set(id, []);
+  // Split subjects across workers
+  const numWorkers = Math.max(1, os.availableParallelism() - 1);
+  const subjectEntries = [...subjectVecs.entries()].map(([id, vec]) => ({ id, embedding: Array.from(vec) }));
+  const sliceSize = Math.ceil(subjectEntries.length / numWorkers);
+  const slices = Array.from({ length: numWorkers }, (_, i) => subjectEntries.slice(i * sliceSize, (i + 1) * sliceSize)).filter(s => s.length > 0);
 
+  console.log(`Spawning ${slices.length} workers (${os.availableParallelism()} logical cores)…`);
+  const workers = slices.map(subjects => new Worker(WORKER_FILE, { workerData: { subjects, top } }));
+
+  // Stream cards and broadcast batches
   console.log('Streaming card embeddings…');
   let cardCount = 0;
+  let batch = [];
+  const streamStart = Date.now();
 
   const rl = readline.createInterface({ input: fs.createReadStream(CARDS_NDJSON), crlfDelay: Infinity });
   for await (const line of rl) {
     if (!line.trim()) continue;
-    let cardVec, cardId;
-    try {
-      const obj = JSON.parse(line);
-      cardId  = obj.id;
-      cardVec = new Float32Array(obj.embedding);
-    } catch { continue; }
+    let obj;
+    try { obj = JSON.parse(line); } catch { continue; }
+    if (!obj.id || !obj.embedding) continue;
 
-    for (const [subjectId, subjectVec] of subjectVecs) {
-      const sim = cosine(subjectVec, cardVec);
-      const heap = topN.get(subjectId);
-      heap.push({ scryfall_id: cardId, similarity: sim });
-      // Keep only top*2 in memory during streaming to avoid unbounded growth;
-      // we'll trim to `top` at the end
-      if (heap.length > top * 3) {
-        heap.sort((a, b) => b.similarity - a.similarity);
-        heap.splice(top * 2);
-      }
-    }
+    batch.push({ id: obj.id, embedding: obj.embedding });
 
-    cardCount++;
-    if (cardCount % 10000 === 0) {
-      console.log(`  Streamed ${cardCount.toLocaleString()} cards…`);
+    if (batch.length >= CARD_BATCH_SIZE) {
+      const b = batch; batch = [];
+      workers.forEach(w => w.postMessage({ type: 'batch', cards: b }));
+      await Promise.all(workers.map(w => waitFor(w, 'done')));
+      cardCount += b.length;
+      const elapsed = (Date.now() - streamStart) / 1000;
+      console.log(`  Streamed ${cardCount.toLocaleString()} cards — ${(cardCount / elapsed).toFixed(0)}/s`);
     }
   }
 
-  console.log(`Streamed ${cardCount.toLocaleString()} card embeddings. Building matches…`);
+  // Flush remaining
+  if (batch.length > 0) {
+    workers.forEach(w => w.postMessage({ type: 'batch', cards: batch }));
+    await Promise.all(workers.map(w => waitFor(w, 'done')));
+    cardCount += batch.length;
+  }
 
-  // Sort and trim, then denormalize; write one file per subject
+  console.log(`Streamed ${cardCount.toLocaleString()} card embeddings. Collecting results…`);
+
+  // Finalize all workers and collect results
+  workers.forEach(w => w.postMessage({ type: 'finalize' }));
+  const resultMsgs = await Promise.all(workers.map(w => waitFor(w, 'results')));
+
+  // Merge topN maps from all workers
+  const topN = new Map();
+  for (const msg of resultMsgs) {
+    for (const [id, heap] of msg.topN) topN.set(id, heap);
+  }
+
+  console.log(`Writing ${topN.size.toLocaleString()} match files…`);
+
+  // Write match files
   let matched = 0;
+  const writeStart = Date.now();
   for (const [subjectId, heap] of topN) {
-    heap.sort((a, b) => b.similarity - a.similarity);
-    const topMatches = heap.slice(0, top).map(m => {
+    const topMatches = heap.map(m => {
       const card = cardsMap.get(m.scryfall_id);
       return {
-        scryfall_id:   m.scryfall_id,
-        similarity:    parseFloat(m.similarity.toFixed(4)),
-        name:          card?.name ?? '',
-        image_uri:     card?.image_uri ?? null,
-        art_crop_uri:  card?.art_crop_uri ?? null,
-        artist:        card?.artist ?? null,
-        set_name:      card?.set_name ?? null,
+        scryfall_id:  m.scryfall_id,
+        similarity:   parseFloat(m.similarity.toFixed(4)),
+        name:         card?.name ?? '',
+        image_uri:    card?.image_uri ?? null,
+        art_crop_uri: card?.art_crop_uri ?? null,
+        artist:       card?.artist ?? null,
+        set_name:     card?.set_name ?? null,
       };
     });
     fs.writeFileSync(path.join(MATCHES_DIR, `${subjectId}.json`), JSON.stringify(topMatches));
@@ -154,8 +186,12 @@ async function main() {
       const top1 = topMatches[0];
       const subj = targets.find(s => s.id === subjectId);
       console.log(`  ✓ ${subj?.name ?? subjectId} → ${top1?.name ?? '?'} (${top1?.similarity ?? '?'})`);
-    } else if (matched % 500 === 0 || matched === targets.length) {
-      console.log(`  Writing matches… ${matched.toLocaleString()} / ${targets.length.toLocaleString()}`);
+    } else if (matched % 500 === 0 || matched === topN.size) {
+      const elapsed = (Date.now() - writeStart) / 1000;
+      const rate = matched / elapsed;
+      const etaSec = rate > 0 ? Math.round((topN.size - matched) / rate) : 0;
+      const eta = etaSec > 60 ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s` : `${etaSec}s`;
+      console.log(`  Writing matches… ${matched.toLocaleString()} / ${topN.size.toLocaleString()} (${((matched/topN.size)*100).toFixed(1)}%) — ${rate.toFixed(0)}/s — ETA ${eta}`);
     }
   }
 
