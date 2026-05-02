@@ -35,12 +35,14 @@ function parseArgs() {
   const typesArg     = args.find(a => a.startsWith('--types='));
   const types        = typesArg ? typesArg.split('=')[1].split(',') : null;
   const verbose      = args.includes('--verbose');
+  const dryRun       = args.includes('--dry-run');
   return {
     doSubjects: !cardsOnly,
     doCards:    !subjectsOnly,
     limit,
     types,
     verbose,
+    dryRun,
   };
 }
 
@@ -117,7 +119,7 @@ async function embedItems(client, items, ndjsonPath, opts = {}) {
     const rate = done / elapsed;
     const etaSec = rate > 0 ? Math.round((work.length - done) / rate) : 0;
     const eta = etaSec > 60 ? `${Math.floor(etaSec/60)}m ${etaSec%60}s` : `${etaSec}s`;
-    console.log(`    ${done.toLocaleString()} / ${work.length.toLocaleString()} (${((done/work.length)*100).toFixed(1)}%) — ${rate.toFixed(1)}/s — ETA ${eta}`);
+    console.log(`  ${done.toLocaleString()} / ${work.length.toLocaleString()} (${((done/work.length)*100).toFixed(1)}%) — ${rate.toFixed(1)}/s — ETA ${eta}`);
   }
 
   // Write fresh ndjson
@@ -145,7 +147,7 @@ async function main() {
     process.exit(1);
   }
 
-  const { doSubjects, doCards, limit, types, verbose } = parseArgs();
+  const { doSubjects, doCards, limit, types, verbose, dryRun } = parseArgs();
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   if (doSubjects) {
@@ -153,7 +155,14 @@ async function main() {
     let subjects = JSON.parse(fs.readFileSync(SUBJECTS_FILE, 'utf8'));
     if (types) subjects = subjects.filter(s => types.includes(s.subject_type));
     const items = subjects.map(s => ({ id: s.id, name: s.name, text: subjectText(s) }));
-    await embedItems(client, items, SUBJECTS_NDJSON, { limit, verbose });
+    if (dryRun) {
+      const existing = await loadExistingHashes(SUBJECTS_NDJSON);
+      const toEmbed = items.filter(({ id, text }) => existing.get(id) !== sha256(text));
+      console.log(`  ${items.length.toLocaleString()} total, ${toEmbed.length.toLocaleString()} to embed (dry run — no API calls)`);
+      if (verbose) toEmbed.forEach(it => console.log(`    ✓ ${it.name}`));
+    } else {
+      await embedItems(client, items, SUBJECTS_NDJSON, { limit, verbose });
+    }
   }
 
   if (doCards) {
@@ -162,7 +171,14 @@ async function main() {
     const items = cards
       .filter(c => c.vision_description) // only cards with descriptions
       .map(c => ({ id: c.scryfall_id, name: c.name, text: cardText(c) }));
-    await embedItems(client, items, CARDS_NDJSON, { limit, verbose });
+    if (dryRun) {
+      const existing = await loadExistingHashes(CARDS_NDJSON);
+      const toEmbed = items.filter(({ id, text }) => existing.get(id) !== sha256(text));
+      console.log(`  ${items.length.toLocaleString()} total, ${toEmbed.length.toLocaleString()} to embed (dry run — no API calls)`);
+      if (verbose) toEmbed.forEach(it => console.log(`    ✓ ${it.name}`));
+    } else {
+      await embedItems(client, items, CARDS_NDJSON, { limit, verbose });
+    }
   }
 
   console.log('Done.');

@@ -29,14 +29,15 @@ const TYPE_MAP = {
 };
 
 function parseArgs() {
-  const typesArg = process.argv.find(a => a.startsWith('--types='));
-  const rawTypes = typesArg ? typesArg.replace('--types=', '').split(',') : ['npc'];
-  const invalid = rawTypes.filter(t => !TYPE_MAP[t]);
+  const args = process.argv.slice(2);
+  const typesArg = args.find(a => a.startsWith('--types='));
+  const types = typesArg ? typesArg.replace('--types=', '').split(',') : ['npc'];
+  const invalid = types.filter(t => !TYPE_MAP[t]);
   if (invalid.length) {
     console.error(`Unknown types: ${invalid.join(', ')}. Valid: ${Object.keys(TYPE_MAP).join(', ')}`);
     process.exit(1);
   }
-  return rawTypes;
+  return { types, dryRun: args.includes('--dry-run'), verbose: args.includes('--verbose') };
 }
 
 function deterministicId(name, sourceBook) {
@@ -131,7 +132,7 @@ function mapHazard(data) {
 
 const MAPPERS = { npc: mapNpc, spell: mapSpell, equipment: mapEquipment, hazard: mapHazard };
 
-function parsePacksDir(packsDir, requestedTypes) {
+function parsePacksDir(packsDir, requestedTypes, verbose = false) {
   const subjects = [];
   if (!fs.existsSync(packsDir)) return subjects;
 
@@ -170,6 +171,7 @@ function parsePacksDir(packsDir, requestedTypes) {
       const mapped = mapper(entry);
       const id = deterministicId(name, mapped.source_book);
       subjects.push({ id, name, ...mapped });
+      if (verbose) console.log(`    ✓ ${name} (${mapped.subject_type})`);
     }
   }
 
@@ -177,7 +179,7 @@ function parsePacksDir(packsDir, requestedTypes) {
 }
 
 async function main() {
-  const requestedTypes = parseArgs();
+  const { types: requestedTypes, dryRun, verbose } = parseArgs();
   console.log(`Syncing types: ${requestedTypes.join(', ')}`);
 
   syncRepo();
@@ -188,8 +190,22 @@ async function main() {
     : path.join(REPO_DIR, 'packs');
 
   console.log(`Scanning ${packsDir}…`);
-  const newSubjects = parsePacksDir(packsDir, requestedTypes);
+  const newSubjects = parsePacksDir(packsDir, requestedTypes, verbose);
   console.log(`Found ${newSubjects.length.toLocaleString()} subjects`);
+
+  if (dryRun) {
+    const byCounts = {};
+    for (const s of newSubjects) byCounts[s.subject_type] = (byCounts[s.subject_type] ?? 0) + 1;
+    console.log('Dry run. Counts by type:');
+    for (const [type, count] of Object.entries(byCounts)) {
+      console.log(`  ${type}: ${count.toLocaleString()}`);
+    }
+    if (fs.existsSync(OUT_FILE)) {
+      const existing = JSON.parse(fs.readFileSync(OUT_FILE, 'utf8'));
+      console.log(`Existing subjects.json: ${existing.length.toLocaleString()} entries`);
+    }
+    return;
+  }
 
   // Upsert into existing subjects.json
   fs.mkdirSync('data', { recursive: true });

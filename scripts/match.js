@@ -24,10 +24,12 @@ const MATCHES_DIR     = path.resolve('data/matches');
 function parseArgs() {
   const args = process.argv.slice(2);
   const force   = args.includes('--force');
+  const dryRun  = args.includes('--dry-run');
+  const verbose = args.includes('--verbose');
   const typesArg = args.find(a => a.startsWith('--types='));
   const types   = typesArg ? typesArg.split('=')[1].split(',') : null;
   const top     = parseInt(args.find(a => a.startsWith('--top='))?.split('=')[1] ?? '20');
-  return { force, types, top };
+  return { force, dryRun, verbose, types, top };
 }
 
 function cosine(a, b) {
@@ -58,7 +60,7 @@ async function loadSubjectEmbeddings(ids) {
 }
 
 async function main() {
-  const { force, types, top } = parseArgs();
+  const { force, dryRun, verbose, types, top } = parseArgs();
 
   const subjects = JSON.parse(fs.readFileSync(SUBJECTS_FILE, 'utf8'));
   const cardsArr = JSON.parse(fs.readFileSync(CARDS_FILE, 'utf8'));
@@ -72,6 +74,10 @@ async function main() {
   if (!force) targets = targets.filter(s => !fs.existsSync(path.join(MATCHES_DIR, `${s.id}.json`)));
 
   console.log(`${subjects.length.toLocaleString()} total subjects, ${targets.length.toLocaleString()} to match`);
+  if (dryRun) {
+    if (verbose) targets.forEach(s => console.log(`  - ${s.name} (${s.id})`));
+    return;
+  }
   if (targets.length === 0) { console.log('Nothing to do. Use --force to recompute.'); return; }
 
   const targetIds = new Set(targets.map(s => s.id));
@@ -82,6 +88,7 @@ async function main() {
     console.error('No subject embeddings found. Run: node scripts/embed.js --subjects-only');
     process.exit(1);
   }
+  console.log(`Subject embeddings: ${subjectVecs.size.toLocaleString()} loaded`);
 
   // Initialize top-N heaps for each subject: Map<subjectId, [{scryfall_id, similarity}]>
   const topN = new Map();
@@ -113,7 +120,9 @@ async function main() {
     }
 
     cardCount++;
-    if (cardCount % 10000 === 0) console.log(`  Streamed ${cardCount.toLocaleString()} cards…`);
+    if (cardCount % 10000 === 0) {
+      console.log(`  Streamed ${cardCount.toLocaleString()} cards…`);
+    }
   }
 
   console.log(`Streamed ${cardCount.toLocaleString()} card embeddings. Building matches…`);
@@ -136,6 +145,13 @@ async function main() {
     });
     fs.writeFileSync(path.join(MATCHES_DIR, `${subjectId}.json`), JSON.stringify(topMatches));
     matched++;
+    if (verbose) {
+      const top1 = topMatches[0];
+      const subj = targets.find(s => s.id === subjectId);
+      console.log(`  ✓ ${subj?.name ?? subjectId} → ${top1?.name ?? '?'} (${top1?.similarity ?? '?'})`);
+    } else if (matched % 500 === 0 || matched === targets.length) {
+      console.log(`  Writing matches… ${matched.toLocaleString()} / ${targets.length.toLocaleString()}`);
+    }
   }
 
   console.log(`Done. Matched ${matched.toLocaleString()} subjects → ${MATCHES_DIR}/`);
