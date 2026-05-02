@@ -2,4 +2,4 @@ node_modules/
 .env.local
 data/pf2e-repo/
 data/cards.json
-data/embeddings/cards.ndjson
+data/embeddings/
