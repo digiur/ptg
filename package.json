@@ -1,0 +1,17 @@
+{
+  "name": "pathfinder-the-gathering",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync-cards":    "node scripts/sync-cards.js",
+    "sync-subjects": "node scripts/sync-subjects.js",
+    "describe":      "node scripts/describe-cards.js",
+    "embed":         "node scripts/embed.js",
+    "match":         "node scripts/match.js"
+  },
+  "dependencies": {
+    "openai": "^4.0.0",
+    "dotenv": "^16.0.0"
+  }
+}

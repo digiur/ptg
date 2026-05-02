@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pathfinder the Gathering</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Pathfinder the Gathering</h1>
+    <p class="tagline">Pathfinder 2e entities matched to Magic: The Gathering card art</p>
+  </header>
+
+  <main>
+    <div class="filters">
+      <input type="search" id="search" placeholder="Search by name…" autocomplete="off" />
+      <select id="type-filter">
+        <option value="">All types</option>
+        <option value="creature">Creature</option>
+        <option value="spell">Spell</option>
+        <option value="item">Item</option>
+        <option value="hazard">Hazard</option>
+      </select>
+      <span id="count"></span>
+    </div>
+
+    <div id="grid" class="subject-grid"></div>
+    <div id="empty" class="empty-state" hidden>No results</div>
+    <div id="loading" class="loading">Loading…</div>
+  </main>
+
+  <script type="module">
+    import { fetchJSON } from './app.js';
+
+    const grid    = document.getElementById('grid');
+    const loading = document.getElementById('loading');
+    const empty   = document.getElementById('empty');
+    const count   = document.getElementById('count');
+    const search  = document.getElementById('search');
+    const typeEl  = document.getElementById('type-filter');
+
+    let subjects = [];
+
+    function render() {
+      const q    = search.value.trim().toLowerCase();
+      const type = typeEl.value;
+
+      const filtered = subjects.filter(s => {
+        if (type && s.subject_type !== type) return false;
+        if (q && !s.name.toLowerCase().includes(q)) return false;
+        return true;
+      });
+
+      count.textContent = `${filtered.length.toLocaleString()} result${filtered.length !== 1 ? 's' : ''}`;
+      grid.innerHTML = '';
+      empty.hidden = filtered.length > 0;
+
+      for (const s of filtered) {
+        const a = document.createElement('a');
+        a.href = `subject.html?id=${encodeURIComponent(s.id)}`;
+        a.className = 'subject-card';
+        a.innerHTML = `
+          <span class="subject-type ${s.subject_type}">${s.subject_type}</span>
+          <span class="subject-name">${escHtml(s.name)}</span>
+          <span class="subject-meta">Level ${s.level} · ${escHtml(s.size)}</span>
+        `;
+        grid.appendChild(a);
+      }
+    }
+
+    function escHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    search.addEventListener('input', render);
+    typeEl.addEventListener('change', render);
+
+    subjects = await fetchJSON('data/subjects.json');
+    loading.hidden = true;
+    render();
+  </script>
+</body>
+</html>

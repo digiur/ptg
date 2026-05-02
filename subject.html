@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Subject — Pathfinder the Gathering</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <a href="index.html" class="back-link">← All subjects</a>
+    <h1 id="subject-name">Loading…</h1>
+    <div id="subject-meta" class="subject-detail-meta"></div>
+  </header>
+
+  <main>
+    <section id="description-section" hidden>
+      <p id="description"></p>
+    </section>
+
+    <section id="matches-section">
+      <h2>Matched card art</h2>
+      <div id="card-grid" class="card-grid"></div>
+      <div id="loading" class="loading">Loading…</div>
+      <div id="no-matches" class="empty-state" hidden>No matches found for this subject.</div>
+    </section>
+  </main>
+
+  <script type="module">
+    import { fetchJSON, getParam } from './app.js';
+
+    const id = getParam('id');
+    if (!id) { document.getElementById('subject-name').textContent = 'No subject specified.'; throw new Error('No id'); }
+
+    const [subjects, matches] = await Promise.all([
+      fetchJSON('data/subjects.json'),
+      fetchJSON('data/matches.json'),
+    ]);
+
+    const subject = subjects.find(s => s.id === id);
+    const loading = document.getElementById('loading');
+    loading.hidden = true;
+
+    if (!subject) {
+      document.getElementById('subject-name').textContent = 'Subject not found.';
+      throw new Error('Subject not found: ' + id);
+    }
+
+    // Header
+    document.title = `${subject.name} — Pathfinder the Gathering`;
+    document.getElementById('subject-name').textContent = subject.name;
+    document.getElementById('subject-meta').innerHTML = `
+      <span class="subject-type ${subject.subject_type}">${subject.subject_type}</span>
+      <span>Level ${subject.level}</span>
+      <span>${escHtml(subject.size)}</span>
+      <span>${escHtml(subject.rarity)}</span>
+      ${subject.source_book ? `<span>${escHtml(subject.source_book)}</span>` : ''}
+      ${subject.traits?.length ? `<span class="traits">${subject.traits.map(escHtml).join(', ')}</span>` : ''}
+    `;
+
+    if (subject.description) {
+      document.getElementById('description').textContent = subject.description;
+      document.getElementById('description-section').hidden = false;
+    }
+
+    // Cards
+    const cardGrid = document.getElementById('card-grid');
+    const noMatches = document.getElementById('no-matches');
+    const subjectMatches = matches[id] ?? [];
+
+    if (subjectMatches.length === 0) {
+      noMatches.hidden = false;
+    } else {
+      for (const m of subjectMatches) {
+        const div = document.createElement('div');
+        div.className = 'card-item';
+        div.innerHTML = `
+          ${m.art_crop_uri
+            ? `<img src="${escHtml(m.art_crop_uri)}" alt="${escHtml(m.name)}" loading="lazy" />`
+            : `<div class="no-image">No image</div>`
+          }
+          <div class="card-info">
+            <span class="card-name">${escHtml(m.name)}</span>
+            ${m.artist ? `<span class="card-artist">${escHtml(m.artist)}</span>` : ''}
+            ${m.set_name ? `<span class="card-set">${escHtml(m.set_name)}</span>` : ''}
+            <span class="card-sim">${(m.similarity * 100).toFixed(1)}% match</span>
+          </div>
+        `;
+        cardGrid.appendChild(div);
+      }
+    }
+
+    function escHtml(s) {
+      return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+  </script>
+</body>
+</html>
