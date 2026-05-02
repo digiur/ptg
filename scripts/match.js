@@ -9,7 +9,7 @@
 //   node scripts/match.js --types=all             # match all subjects not yet written
 //   node scripts/match.js --types=npc,spell       # only (re-)match subjects of these types
 //   node scripts/match.js --types=all --force     # recompute all, replacing existing matches
-//   node scripts/match.js --top=20               # how many cards per subject (default 20)
+//   node scripts/match.js --top=50               # how many cards per subject (default 50)
 
 import fs from 'fs';
 import path from 'path';
@@ -38,7 +38,7 @@ function parseArgs() {
   }
   const raw = typesArg.split('=')[1].split(',');
   const types = raw.includes('all') ? null : raw;
-  const top     = parseInt(args.find(a => a.startsWith('--top='))?.split('=')[1] ?? '20');
+  const top     = parseInt(args.find(a => a.startsWith('--top='))?.split('=')[1] ?? '50');
   return { force, dryRun, verbose, types, top };
 }
 
