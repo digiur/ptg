@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// match.js — cosine similarity between subjects and cards → data/matches.json
+// match.js — cosine similarity between subjects and cards → data/matches/{id}.json
 // Subjects loaded into memory (~1 MB). Cards streamed line-by-line (~107 MB, never fully in memory).
 // Output is denormalized: each match entry includes card display fields so the browser
-// never needs to load cards.json.
+// never needs to load cards.json. Each subject gets its own tiny JSON file so the
+// subject page only downloads ~2 KB instead of the full matches corpus.
 //
 // Usage:
-//   node scripts/match.js                        # match all subjects not yet in matches.json
+//   node scripts/match.js                        # match all subjects not yet written
 //   node scripts/match.js --types=npc,spell      # only (re-)match subjects of these types
 //   node scripts/match.js --force                # recompute all, replacing existing matches
 //   node scripts/match.js --top=20               # how many cards per subject (default 20)
@@ -18,7 +19,7 @@ const SUBJECTS_FILE   = path.resolve('data/subjects.json');
 const SUBJECTS_NDJSON = path.resolve('data/embeddings/subjects.ndjson');
 const CARDS_FILE      = path.resolve('data/cards.json');
 const CARDS_NDJSON    = path.resolve('data/embeddings/cards.ndjson');
-const MATCHES_FILE    = path.resolve('data/matches.json');
+const MATCHES_DIR     = path.resolve('data/matches');
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -63,16 +64,12 @@ async function main() {
   const cardsArr = JSON.parse(fs.readFileSync(CARDS_FILE, 'utf8'));
   const cardsMap = new Map(cardsArr.map(c => [c.scryfall_id, c]));
 
-  // Load existing matches
-  let matches = {};
-  if (fs.existsSync(MATCHES_FILE)) {
-    matches = JSON.parse(fs.readFileSync(MATCHES_FILE, 'utf8'));
-  }
+  fs.mkdirSync(MATCHES_DIR, { recursive: true });
 
   // Determine which subjects to (re-)match
   let targets = subjects;
   if (types) targets = targets.filter(s => types.includes(s.subject_type));
-  if (!force) targets = targets.filter(s => !matches[s.id]);
+  if (!force) targets = targets.filter(s => !fs.existsSync(path.join(MATCHES_DIR, `${s.id}.json`)));
 
   console.log(`${subjects.length.toLocaleString()} total subjects, ${targets.length.toLocaleString()} to match`);
   if (targets.length === 0) { console.log('Nothing to do. Use --force to recompute.'); return; }
@@ -121,13 +118,11 @@ async function main() {
 
   console.log(`Streamed ${cardCount.toLocaleString()} card embeddings. Building matches…`);
 
-  // Sort and trim, then denormalize
+  // Sort and trim, then denormalize; write one file per subject
   let matched = 0;
   for (const [subjectId, heap] of topN) {
     heap.sort((a, b) => b.similarity - a.similarity);
-    const top20 = heap.slice(0, top);
-
-    matches[subjectId] = top20.map(m => {
+    const topMatches = heap.slice(0, top).map(m => {
       const card = cardsMap.get(m.scryfall_id);
       return {
         scryfall_id:   m.scryfall_id,
@@ -139,12 +134,11 @@ async function main() {
         set_name:      card?.set_name ?? null,
       };
     });
+    fs.writeFileSync(path.join(MATCHES_DIR, `${subjectId}.json`), JSON.stringify(topMatches));
     matched++;
   }
 
-  fs.mkdirSync('data', { recursive: true });
-  fs.writeFileSync(MATCHES_FILE, JSON.stringify(matches, null, 0));
-  console.log(`Done. Matched ${matched.toLocaleString()} subjects → ${MATCHES_FILE}`);
+  console.log(`Done. Matched ${matched.toLocaleString()} subjects → ${MATCHES_DIR}/`);
 }
 
 main().catch(err => { console.error(err); process.exit(1); });

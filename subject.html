@@ -36,9 +36,9 @@
     const id = getParam('id');
     if (!id) { document.getElementById('subject-name').textContent = 'No subject specified.'; throw new Error('No id'); }
 
-    const [subjects, matches] = await Promise.all([
+    const [subjects, subjectMatches] = await Promise.all([
       fetchJSON('data/subjects.json'),
-      fetchJSON('data/matches.json'),
+      fetchJSON(`data/matches/${id}.json`).catch(() => []),
     ]);
 
     const subject = subjects.find(s => s.id === id);
@@ -70,7 +70,7 @@
     // Cards
     const cardGrid = document.getElementById('card-grid');
     const noMatches = document.getElementById('no-matches');
-    const subjectMatches = matches[id] ?? [];
+    // subjectMatches already loaded above
 
     if (subjectMatches.length === 0) {
       noMatches.hidden = false;
