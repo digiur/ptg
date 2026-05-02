@@ -51,17 +51,6 @@ function waitFor(worker, type) {
   });
 }
 
-function cosine(a, b) {
-  let dot = 0, magA = 0, magB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot  += a[i] * b[i];
-    magA += a[i] * a[i];
-    magB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(magA) * Math.sqrt(magB);
-  return denom === 0 ? 0 : dot / denom;
-}
-
 async function loadSubjectEmbeddings(ids) {
   // ids: Set of subject ids to load (null = load all)
   const map = new Map(); // id → Float32Array
