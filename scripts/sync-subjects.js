@@ -89,7 +89,7 @@ function mapNpc(data) {
     rarity:       traits.rarity?.value ?? 'common',
     traits:       (traits.value ?? []).map(String),
     source_book:  details.source?.value ?? sys.source?.book ?? '',
-    description:  stripHtml(details.publicNotes ?? details.privateNotes ?? ''),
+    description:  stripHtml(details.publicNotes || details.privateNotes || details.blurb || ''),
     is_npc:       true,
   };
 }
@@ -135,7 +135,7 @@ function mapHazard(data) {
     rarity:       traits.rarity?.value ?? 'common',
     traits:       (traits.value ?? []).map(String),
     source_book:  details.source?.value ?? sys.source?.book ?? '',
-    description:  stripHtml(details.description?.value ?? sys.description?.value ?? ''),
+    description:  stripHtml(typeof details.description === 'string' ? details.description : (details.description?.value ?? sys.description?.value ?? '')),
     is_npc:       false,
   };
 }
@@ -211,7 +211,7 @@ function mapVehicle(data) {
     rarity:       traits.rarity?.value ?? 'common',
     traits:       (traits.value ?? []).map(String),
     source_book:  sys.publication?.title ?? sys.source?.value ?? '',
-    description:  stripHtml(sys.description?.value ?? ''),
+    description:  stripHtml(typeof sys.details?.description === 'string' ? sys.details.description : (sys.description?.value ?? '')),
     is_npc:       false,
   };
 }
